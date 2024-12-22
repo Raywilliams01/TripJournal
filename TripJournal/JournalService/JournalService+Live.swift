@@ -62,14 +62,14 @@ class JournalServiceLive: JournalService {
     }
     
     init() {
-        self.baseURL = AppEnviroment.base.baseURL
+        baseURL = AppEnviroment.base.baseURL
         
         if let keychainToken = try? KeychainHelper.shared.getToken(){
             if !isTokenExpired(keychainToken) {
-                self.token = keychainToken
+                token = keychainToken
             } else {
-                self.tokenExpired = true
-                self.token = nil
+                tokenExpired = true
+                token = nil
             }
         }
     }
@@ -80,6 +80,46 @@ class JournalServiceLive: JournalService {
         }
         
         return expirationDate <= Date()
+    }
+    
+    private func encodeBodyData<T: Encodable>(_ bodyData: T) async throws -> Data {
+        do {
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            return try encoder.encode(bodyData)
+        } catch {
+            throw NetworkError.encodingError
+        }
+    }
+    
+    private func createRequestUrl(_ url: URL,_ networkMethod: String) async throws -> URLRequest {
+        guard let access_token = self.token?.access_token  else {
+            throw NetworkError.badURL
+        }
+        var requestURL = URLRequest(url: url)
+        requestURL.httpMethod = networkMethod
+        requestURL.addValue("application/json", forHTTPHeaderField: "Content-Type")
+        requestURL.setValue("Bearer \(access_token)", forHTTPHeaderField: "Authorization")
+        
+        return requestURL
+    }
+    
+    private func performEventRequest(requestUrl requestURL: URLRequest) async throws -> Event {
+        let (data, response) = try await URLSession.shared.data(for: requestURL)
+        
+        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+            throw NetworkError.badRequest
+        }
+        
+        do {
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            
+            let event = try decoder.decode(Event.self, from: data)
+            return event
+        } catch {
+            throw NetworkError.decodingError
+        }
     }
     
     private func createLoginRegister(username: String, password: String) throws -> URLRequest {
@@ -127,10 +167,8 @@ class JournalServiceLive: JournalService {
         
         let loginData = "grant_type=&username=\(username)&password=\(password)"
         
-        var request  = URLRequest(url: url)
-        request.httpMethod = NetworkMethod.post.value
-        request.addValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        request.addValue("application/json", forHTTPHeaderField: "Accept")
+        var request = try await createRequestUrl(url, NetworkMethod.post.value)
+        
         request.httpBody = loginData.data(using: .utf8)
         
     do {
@@ -163,24 +201,9 @@ class JournalServiceLive: JournalService {
             throw NetworkError.badURL
         }
         
-        var requestURL = URLRequest(url: url)
-        guard let access_token = self.token?.access_token  else {
-            throw NetworkError.badURL
-        }
+        var requestURL = try await createRequestUrl(url, NetworkMethod.post.value)
         
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        
-        do {
-            let jsonData = try encoder.encode(request)
-            requestURL.httpBody = jsonData
-        } catch {
-            throw NetworkError.encodingError
-        }
-        
-        requestURL.httpMethod = NetworkMethod.post.value
-        requestURL.addValue("application/json", forHTTPHeaderField: "Content-Type")
-        requestURL.setValue("Bearer \(access_token)", forHTTPHeaderField: "Authorization")
+        requestURL.httpBody = try await encodeBodyData(request)
         
         do {
             let (data, response) = try await URLSession.shared.data(for: requestURL)
@@ -207,13 +230,7 @@ class JournalServiceLive: JournalService {
             throw NetworkError.badURL
         }
         
-        var request = URLRequest(url: url)
-        request.httpMethod = NetworkMethod.get.value
-        
-        if let access_token = self.token?.access_token {
-            request.setValue("Bearer \(access_token)", forHTTPHeaderField: "Authorization")
-        }
-        
+        var request = try await createRequestUrl(url, NetworkMethod.get.value)
         
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
@@ -241,14 +258,7 @@ class JournalServiceLive: JournalService {
             throw NetworkError.badURL
         }
         
-        guard let access_token = self.token?.access_token  else {
-            throw NetworkError.badURL
-        }
-        
-        var request = URLRequest(url: url)
-        request.httpMethod = NetworkMethod.get.value
-        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("Bearer \(access_token)", forHTTPHeaderField: "Authorization")
+        let request = try await createRequestUrl(url, NetworkMethod.get.value)
         
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
@@ -272,24 +282,9 @@ class JournalServiceLive: JournalService {
             throw NetworkError.badURL
         }
         
-        guard let access_token = self.token?.access_token  else {
-            throw NetworkError.badURL
-        }
+        var requestURL = try await createRequestUrl(url, NetworkMethod.put.value)
         
-        var requestURL = URLRequest(url: url)
-        requestURL.httpMethod = NetworkMethod.put.value
-        requestURL.addValue("application/json", forHTTPHeaderField: "Content-Type")
-        requestURL.setValue("Bearer \(access_token)", forHTTPHeaderField: "Authorization")
-        
-        do {
-            let encoder = JSONEncoder()
-            encoder.dateEncodingStrategy = .iso8601
-            
-            let jsonData = try encoder.encode(request)
-            requestURL.httpBody = jsonData
-        } catch {
-            throw NetworkError.encodingError
-        }
+        requestURL.httpBody = try await encodeBodyData(request)
         
         do {
             let (data, response) = try await URLSession.shared.data(for: requestURL)
@@ -313,15 +308,8 @@ class JournalServiceLive: JournalService {
             throw NetworkError.badURL
         }
         
-        guard let access_token = self.token?.access_token else {
-            throw NetworkError.badURL
-        }
-        
-        var request = URLRequest(url: url)
-        request.httpMethod = NetworkMethod.delete.value
-        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("Bearer \(access_token)", forHTTPHeaderField: "Authorization")
-        
+        let request = try await createRequestUrl(url, NetworkMethod.delete.value)
+
         do {
             let (_, response) = try await URLSession.shared.data(for: request)
           
@@ -340,44 +328,11 @@ class JournalServiceLive: JournalService {
             throw NetworkError.badURL
         }
         
-        guard let access_token = self.token?.access_token  else {
-            throw NetworkError.badURL
-        }
+        var requestURL = try await createRequestUrl(url, NetworkMethod.post.value)
         
-        var requestURL = URLRequest(url: url)
-        requestURL.httpMethod = NetworkMethod.post.value
-        requestURL.addValue("application/json", forHTTPHeaderField: "Content-Type")
-        requestURL.setValue("Bearer \(access_token)", forHTTPHeaderField: "Authorization")
+        requestURL.httpBody = try await encodeBodyData(request)
         
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        
-        do {
-            let jsonData = try encoder.encode(request)
-            requestURL.httpBody = jsonData
-        } catch {
-            throw NetworkError.encodingError
-        }
-        
-        do {
-            let (data, response) = try await URLSession.shared.data(for: requestURL)
-            
-            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-                throw NetworkError.badRequest
-            }
-            
-            do {
-                let decoder = JSONDecoder()
-                decoder.dateDecodingStrategy = .iso8601
-                
-                let event = try decoder.decode(Event.self, from: data)
-                return event
-            } catch {
-                throw NetworkError.decodingError
-            }
-        } catch {
-            throw NetworkError.badResponse
-        }
+        return try await performEventRequest(requestUrl: requestURL)
     }
     
     func updateEvent(withId eventId: Event.ID, and request: EventUpdate) async throws -> Event {
@@ -385,43 +340,11 @@ class JournalServiceLive: JournalService {
             throw NetworkError.badURL
         }
         
-        guard let access_token = self.token?.access_token  else {
-            throw NetworkError.badURL
-        }
+        var requestURL = try await createRequestUrl(url, NetworkMethod.put.value)
         
-        var requestURL = URLRequest(url: url)
-        requestURL.httpMethod = NetworkMethod.put.value
-        requestURL.addValue("application/json", forHTTPHeaderField: "Content-Type")
-        requestURL.setValue("Bearer \(access_token)", forHTTPHeaderField: "Authorization")
+        requestURL.httpBody = try await encodeBodyData(request)
         
-        do {
-            let encoder = JSONEncoder()
-            encoder.dateEncodingStrategy = .iso8601
-            
-            let jsonData = try encoder.encode(request)
-            requestURL.httpBody = jsonData
-        } catch {
-            throw NetworkError.encodingError
-        }
-        
-        do {
-            let (data, response) = try await URLSession.shared.data(for: requestURL)
-            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-                throw NetworkError.badRequest
-            }
-            
-            do {
-                let decoder = JSONDecoder()
-                decoder.dateDecodingStrategy = .iso8601
-                
-                let event = try decoder.decode(Event.self, from: data)
-                return event
-            } catch {
-                throw NetworkError.decodingError
-            }
-        } catch {
-            throw NetworkError.badResponse
-        }
+        return try await performEventRequest(requestUrl: requestURL)
     }
     
     func deleteEvent(withId eventId: Event.ID) async throws {
@@ -429,18 +352,11 @@ class JournalServiceLive: JournalService {
             throw NetworkError.badURL
         }
         
-        guard let access_token = self.token?.access_token  else {
-            throw NetworkError.badURL
-        }
-        
-        var request = URLRequest(url: url)
-        request.httpMethod = NetworkMethod.put.value
-        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("Bearer \(access_token)", forHTTPHeaderField: "Authorization")
+        var request = try await createRequestUrl(url, NetworkMethod.delete.value)
         
         do {
             let (_, response) = try await URLSession.shared.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 204 else {
                 throw NetworkError.badRequest
             }
         } catch {
@@ -453,15 +369,7 @@ class JournalServiceLive: JournalService {
             throw NetworkError.badURL
         }
         
-       
-        guard let access_token = self.token?.access_token  else {
-            throw NetworkError.badURL
-        }
-        
-        var requestURL = URLRequest(url: url)
-        requestURL.httpMethod = NetworkMethod.post.value
-        requestURL.addValue("application/json", forHTTPHeaderField: "Content-Type")
-        requestURL.setValue("Bearer \(access_token)", forHTTPHeaderField: "Authorization")
+        var requestURL = try await createRequestUrl(url, NetworkMethod.post.value)
         
         do {
             let encoder = JSONEncoder()
@@ -490,18 +398,13 @@ class JournalServiceLive: JournalService {
             throw NetworkError.badURL
         }
         
-        guard let access_token = self.token?.access_token else {
-            throw NetworkError.badURL
-        }
-        
-        var request = URLRequest(url: url)
-        request.httpMethod = NetworkMethod.delete.value
-        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("Bearer \(access_token)", forHTTPHeaderField: "Authorization")
+        var request = try await createRequestUrl(url, NetworkMethod.delete.value)
         
         do {
             let (_, response) = try await URLSession.shared.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+            guard let httpResponse = response as? HTTPURLResponse,
+                    httpResponse.statusCode == 204
+            else {
                 throw NetworkError.badRequest
             }
         } catch {
